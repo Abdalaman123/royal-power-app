@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
+import { disablePush, enablePush } from '../lib/push'
 import { isSoundOn, playNotificationSound, setSoundOn, soundForType, unlockAudio } from '../lib/sound'
 import {
   BarChart3,
@@ -145,7 +146,13 @@ export default function AdminLayout() {
     }
   }, [uid])
 
+  // Android app: register this phone for ticket push notifications
+  useEffect(() => {
+    if (uid) void enablePush((path) => navigate(path))
+  }, [uid, navigate])
+
   const logout = async () => {
+    await disablePush()
     await signOut()
     toast.success('Signed out')
     navigate('/admin/login', { replace: true })

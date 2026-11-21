@@ -1,0 +1,137 @@
+name: Build and release apps
+
+# Every push to "main":
+#   1. builds the Windows installer  (users' desktop apps update themselves from it)
+#   2. builds the Android APK
+#   3. publishes both on one GitHub Release (version 1.0.<run number>)
+# The website itself is deployed separately by Netlify from the same push.
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'supabase/**'
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+  VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+
+jobs:
+  release:
+    name: Create draft release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - id: v
+        run: echo "version=1.0.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v${{ steps.v.outputs.version }}"
+          gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1 || \
+            gh release create "$TAG" --repo "${{ github.repository }}" --target "${{ github.sha }}" \
+              --draft --title "ROYAL POWER $TAG" --notes "Automatic build of commit ${{ github.sha }}."
+
+  windows:
+    name: Windows installer
+    needs: release
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install packages
+        run: npm install --no-audit --no-fund
+      - name: Remove any installer left in public/downloads
+        run: rm -f public/downloads/*.exe public/downloads/*.apk
+      - name: Stamp version
+        run: npm version "$VERSION" --no-git-tag-version --allow-same-version
+      - name: Build website
+        run: npm run build
+      - name: Build installer
+        run: npx electron-builder --win --publish never
+      - name: Make sure latest.yml exists (auto-update manifest)
+        run: |
+          ls -la release
+          if [ ! -f release/latest.yml ]; then
+            SHA=$(openssl dgst -sha512 -binary release/ROYAL-POWER-Setup.exe | openssl base64 -A)
+            SIZE=$(stat -c%s release/ROYAL-POWER-Setup.exe)
+            printf "version: %s\nfiles:\n  - url: ROYAL-POWER-Setup.exe\n    sha512: %s\n    size: %s\npath: ROYAL-POWER-Setup.exe\nsha512: %s\nreleaseDate: '%s'\n" \
+              "$VERSION" "$SHA" "$SIZE" "$SHA" "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" > release/latest.yml
+          fi
+      - name: Upload to release
+        run: |
+          FILES="release/ROYAL-POWER-Setup.exe release/latest.yml"
+          [ -f release/ROYAL-POWER-Setup.exe.blockmap ] && FILES="$FILES release/ROYAL-POWER-Setup.exe.blockmap"
+          gh release upload "v$VERSION" $FILES --repo "${{ github.repository }}" --clobber
+
+  android:
+    name: Android APK
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Install packages
+        run: npm install --no-audit --no-fund
+      - name: Remove any installer left in public/downloads
+        run: rm -f public/downloads/*.exe public/downloads/*.apk
+      - name: Build website
+        run: npm run build
+      - name: Create Android project
+        run: npx cap add android
+      - name: App icon and version
+        run: |
+          cp -r android-resources/res/. android/app/src/main/res/
+          sed -i "s/versionCode [0-9]*/versionCode ${{ github.run_number }}/; s/versionName \"[^\"]*\"/versionName \"$VERSION\"/" android/app/build.gradle
+          grep -n "versionCode\|versionName" android/app/build.gradle
+      - name: Use the fixed signing key (so every APK can update the previous one)
+        run: |
+          mkdir -p ~/.android
+          cp android-signing/debug.keystore ~/.android/debug.keystore
+      - name: Build APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+      - name: Upload to release
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk ROYAL-POWER.apk
+          gh release upload "v$VERSION" ROYAL-POWER.apk --repo "${{ github.repository }}" --clobber
+
+  publish:
+    name: Publish release
+    needs: [release, windows, android]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "v${{ needs.release.outputs.version }}" --repo "${{ github.repository }}" --draft=false --latest

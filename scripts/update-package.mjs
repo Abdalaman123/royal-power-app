@@ -31,6 +31,7 @@ dev['electron-builder'] ||= '^25.1.8'
 dev['@capacitor/cli'] = '^6.2.0'
 dev['@capacitor/core'] = '^6.2.0'
 dev['@capacitor/android'] = '^6.2.0'
+dev['@capacitor/push-notifications'] = '^6.0.3'
 
 const sort = (o) => Object.fromEntries(Object.entries(o).sort(([a], [b]) => a.localeCompare(b)))
 pkg.dependencies = sort(deps)

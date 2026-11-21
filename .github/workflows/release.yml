@@ -1,97 +1,143 @@
-// Supabase Edge Function: sends a phone push notification for every new row in public.notifications.
-// Triggered by a Database Webhook (Insert on "notifications"). Secrets needed (Edge Functions -> Secrets):
-//   FCM_SERVICE_ACCOUNT   the whole Firebase service-account JSON
-//   PUSH_WEBHOOK_SECRET   any long random text; the same text goes into the webhook header "x-webhook-secret"
-// SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are provided automatically.
+name: Build and release apps
 
-const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
-const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-const WEBHOOK_SECRET = Deno.env.get('PUSH_WEBHOOK_SECRET') ?? ''
-const SA = JSON.parse(Deno.env.get('FCM_SERVICE_ACCOUNT') ?? '{}') as { project_id: string; client_email: string; private_key: string }
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'supabase/**'
+  workflow_dispatch:
 
-const enc = new TextEncoder()
-const b64url = (buf: ArrayBuffer | string) => {
-  const bytes = typeof buf === 'string' ? enc.encode(buf) : new Uint8Array(buf)
-  let s = ''
-  for (const b of bytes) s += String.fromCharCode(b)
-  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-}
+concurrency:
+  group: release
+  cancel-in-progress: true
 
-let cached: { token: string; exp: number } | null = null
-async function accessToken(): Promise<string> {
-  const now = Math.floor(Date.now() / 1000)
-  if (cached && cached.exp - 60 > now) return cached.token
-  const pem = SA.private_key.replace(/-----[^-]+-----/g, '').replace(/\s+/g, '')
-  const der = Uint8Array.from(atob(pem), (c) => c.charCodeAt(0))
-  const key = await crypto.subtle.importKey('pkcs8', der, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign'])
-  const head = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))
-  const claims = b64url(JSON.stringify({
-    iss: SA.client_email,
-    scope: 'https://www.googleapis.com/auth/firebase.messaging',
-    aud: 'https://oauth2.googleapis.com/token',
-    iat: now,
-    exp: now + 3600,
-  }))
-  const sig = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, enc.encode(`${head}.${claims}`))
-  const res = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: `${head}.${claims}.${b64url(sig)}` }),
-  })
-  const json = await res.json()
-  if (!res.ok) throw new Error(`Google token error: ${JSON.stringify(json)}`)
-  cached = { token: json.access_token, exp: now + (json.expires_in ?? 3600) }
-  return cached.token
-}
+permissions:
+  contents: write
 
-const rest = (path: string, init: RequestInit = {}) =>
-  fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-    ...init,
-    headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, 'Content-Type': 'application/json', ...(init.headers ?? {}) },
-  })
+env:
+  VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+  VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
 
-Deno.serve(async (req) => {
-  if (!WEBHOOK_SECRET || req.headers.get('x-webhook-secret') !== WEBHOOK_SECRET) return new Response('Forbidden', { status: 403 })
-  try {
-    const payload = await req.json()
-    const rec = payload?.record as { recipient_id: string; type: string; title: string; message?: string; ticket_id?: string } | undefined
-    if (payload?.type !== 'INSERT' || !rec?.recipient_id) return new Response('ignored')
+jobs:
+  release:
+    name: Create draft release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - id: v
+        run: echo "version=1.0.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v${{ steps.v.outputs.version }}"
+          gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1 || \
+            gh release create "$TAG" --repo "${{ github.repository }}" --target "${{ github.sha }}" \
+              --draft --title "ROYAL POWER $TAG" --notes "Automatic build of commit ${{ github.sha }}."
 
-    const r = await rest(`admin_devices?user_id=eq.${encodeURIComponent(rec.recipient_id)}&select=token`)
-    const tokens = ((await r.json()) as { token: string }[]).map((d) => d.token)
-    if (!tokens.length) return new Response('no devices')
+  windows:
+    name: Windows installer
+    needs: release
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install packages
+        run: npm install --no-audit --no-fund
+      - name: Remove any installer left in public/downloads
+        run: rm -f public/downloads/*.exe public/downloads/*.apk
+      - name: Stamp version
+        run: npm version "$VERSION" --no-git-tag-version --allow-same-version
+      - name: Build website
+        run: npm run build
+      - name: Build installer
+        run: npx electron-builder --win --publish never
+      - name: Make sure latest.yml exists (auto-update manifest)
+        run: |
+          ls -la release
+          if [ ! -f release/latest.yml ]; then
+            SHA=$(openssl dgst -sha512 -binary release/ROYAL-POWER-Setup.exe | openssl base64 -A)
+            SIZE=$(stat -c%s release/ROYAL-POWER-Setup.exe)
+            printf "version: %s\nfiles:\n  - url: ROYAL-POWER-Setup.exe\n    sha512: %s\n    size: %s\npath: ROYAL-POWER-Setup.exe\nsha512: %s\nreleaseDate: '%s'\n" \
+              "$VERSION" "$SHA" "$SIZE" "$SHA" "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" > release/latest.yml
+          fi
+      - name: Upload to release
+        run: |
+          FILES="release/ROYAL-POWER-Setup.exe release/latest.yml"
+          [ -f release/ROYAL-POWER-Setup.exe.blockmap ] && FILES="$FILES release/ROYAL-POWER-Setup.exe.blockmap"
+          gh release upload "v$VERSION" $FILES --repo "${{ github.repository }}" --clobber
 
-    const access = await accessToken()
-    let sent = 0
-    for (const token of tokens) {
-      const res = await fetch(`https://fcm.googleapis.com/v1/projects/${SA.project_id}/messages:send`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${access}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: {
-            token,
-            notification: { title: rec.title, body: rec.message ?? '' },
-            data: { type: rec.type, ticket_id: rec.ticket_id ?? '' },
-            android: {
-              priority: 'HIGH',
-              notification: { channel_id: 'tickets', sound: 'default', default_vibrate_timings: true },
-            },
-          },
-        }),
-      })
-      if (res.ok) sent++
-      else {
-        const err = await res.text()
-        console.error('FCM error', res.status, err)
-        // phone uninstalled the app / token expired -> forget it
-        if (res.status === 404 || err.includes('UNREGISTERED')) {
-          await rest(`admin_devices?token=eq.${encodeURIComponent(token)}`, { method: 'DELETE' })
-        }
-      }
-    }
-    return new Response(`sent ${sent}/${tokens.length}`)
-  } catch (e) {
-    console.error(e)
-    return new Response(String(e), { status: 500 })
-  }
-})
+  android:
+    name: Android APK
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Install packages
+        run: npm install --no-audit --no-fund
+      - name: Remove any installer left in public/downloads
+        run: rm -f public/downloads/*.exe public/downloads/*.apk
+      - name: Build website
+        run: npm run build
+      - name: Create Android project
+        run: npx cap add android
+      - name: App icon and version
+        run: |
+          cp -r android-resources/res/. android/app/src/main/res/
+          sed -i "s/versionCode [0-9]*/versionCode ${{ github.run_number }}/; s/versionName \"[^\"]*\"/versionName \"$VERSION\"/" android/app/build.gradle
+          grep -n "versionCode\|versionName" android/app/build.gradle
+      - name: Phone push notifications (Firebase)
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          sed -i 's#</manifest>#    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n</manifest>#' android/app/src/main/AndroidManifest.xml
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            printf '%s' "$GOOGLE_SERVICES_JSON" > android/app/google-services.json
+            echo "google-services.json added"
+          else
+            echo "No GOOGLE_SERVICES_JSON secret: building without push notifications"
+          fi
+      - name: Use the fixed signing key (so every APK can update the previous one)
+        run: |
+          mkdir -p ~/.android
+          cp android-signing/debug.keystore ~/.android/debug.keystore
+      - name: Build APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+      - name: Upload to release
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk ROYAL-POWER.apk
+          gh release upload "v$VERSION" ROYAL-POWER.apk --repo "${{ github.repository }}" --clobber
+
+  publish:
+    name: Publish release
+    needs: [release, windows, android]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "v${{ needs.release.outputs.version }}" --repo "${{ github.repository }}" --draft=false --latest

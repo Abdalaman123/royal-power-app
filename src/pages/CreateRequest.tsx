@@ -387,7 +387,7 @@ export default function CreateRequest() {
           <SectionCard n={1} title="Your details" subtitle="We use this to verify and contact you.">
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Full Name" required htmlFor="full_name" error={errors.full_name?.message}>
-                <input id="full_name" autoComplete="name" className={`input ${errors.full_name ? 'input-error' : ''}`} placeholder="e.g. Ayesha Khan"
+                <input id="full_name" autoComplete="name" className={`input ${errors.full_name ? 'input-error' : ''}`} placeholder="e.g. Muhammad Abdal"
                   {...register('full_name', { required: 'Full name is required', minLength: { value: 2, message: 'Please enter your full name' }, maxLength: { value: 120, message: 'Too long' } })} />
               </Field>
               <Field label="Employee ID" required htmlFor="employee_id" error={errors.employee_id?.message}>

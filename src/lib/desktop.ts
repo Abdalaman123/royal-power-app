@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useSettings } from '../contexts/SettingsContext'
 
 /** GitHub repository that hosts the releases (owner/name). Override with VITE_GITHUB_REPO. */
-const REPO = (import.meta.env.VITE_GITHUB_REPO as string | undefined) || 'Abdalaman123/royal-power-app'
+export const REPO = (import.meta.env.VITE_GITHUB_REPO as string | undefined) || 'Abdalaman123/royal-power-app'
 const LATEST = `https://github.com/${REPO}/releases/latest/download`
 
 /** Always points at the newest release, so the link never goes stale. */
@@ -42,11 +42,14 @@ function loadAssets(): Promise<Assets> {
   if (cache) return cache
   cache = (async (): Promise<Assets> => {
     try {
-      const cached = sessionStorage.getItem('rp_assets')
-      if (cached) return JSON.parse(cached) as Assets
+      const raw = sessionStorage.getItem('rp_assets_v2')
+      if (raw) {
+        const c = JSON.parse(raw) as { t: number; data: Assets }
+        if (Date.now() - c.t < 5 * 60 * 1000 && c.data.resolved) return c.data // only 5 minutes, so a new release shows up quickly
+      }
     } catch { /* storage unavailable */ }
     try {
-      const res = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=15`, { headers: { Accept: 'application/vnd.github+json' } })
+      const res = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=15`, { cache: 'no-store', headers: { Accept: 'application/vnd.github+json' } })
       if (!res.ok) return { resolved: false }
       const releases = (await res.json()) as { draft: boolean; assets: { name: string; browser_download_url: string }[] }[]
       const out: Assets = { resolved: true }
@@ -58,7 +61,7 @@ function loadAssets(): Promise<Assets> {
         }
         if (out.android && out.windows) break
       }
-      try { sessionStorage.setItem('rp_assets', JSON.stringify(out)) } catch { /* ignore */ }
+      try { sessionStorage.setItem('rp_assets_v2', JSON.stringify({ t: Date.now(), data: out })) } catch { /* ignore */ }
       return out
     } catch {
       return { resolved: false }

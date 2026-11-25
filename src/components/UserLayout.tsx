@@ -174,7 +174,7 @@ export default function UserLayout() {
           </div>
         </div>
         <div className="border-t border-silver-200/60 py-4 text-center text-xs text-ink-faint">
-          © {new Date().getFullYear()} {settings.site_name}. All rights reserved.
+          © {new Date().getFullYear()} {settings.site_name}. All rights reserved.{__APP_VERSION__ !== '0.0.0' ? ` · App v${__APP_VERSION__}` : ''}
         </div>
       </footer>
     </div>

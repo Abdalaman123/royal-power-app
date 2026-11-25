@@ -57,27 +57,64 @@ function createWindow() {
   })
 }
 
-/** Checks GitHub Releases on start and every 4 hours; downloads silently; asks to restart when ready. */
+/**
+ * Auto-update from GitHub Releases:
+ *  - checks every time the app opens (and every 4 hours while it stays open)
+ *  - shows an "Update available" pop-up; "Update now" downloads it (progress bar on the taskbar icon)
+ *  - when the download finishes the app restarts by itself and opens the new version
+ */
 function setupAutoUpdate() {
   if (!app.isPackaged || !autoUpdater) return
-  autoUpdater.autoDownload = true
+  autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = true
 
-  autoUpdater.on('update-downloaded', async (info) => {
+  let asked = null // version the user already answered "Later" to during this run
+  let downloading = false
+
+  autoUpdater.on('update-available', async (info) => {
+    if (downloading || asked === info.version) return
     const options = {
       type: 'info',
-      buttons: ['Restart now', 'Later'],
+      buttons: ['Update now', 'Later'],
       defaultId: 0,
       cancelId: 1,
-      title: 'Update ready',
-      message: `ROYAL POWER ${info.version} is ready to install.`,
-      detail: 'Restart to finish updating. If you choose Later, it installs automatically when you close the app.',
+      title: 'Update available',
+      message: `A new version of ROYAL POWER is available (${info.version}).`,
+      detail: `You have ${app.getVersion()}. Update now? The app restarts by itself when the download is finished.`,
     }
     const { response } = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options)
-    if (response === 0) autoUpdater.quitAndInstall(true, true)
+    if (response !== 0) {
+      asked = info.version
+      return
+    }
+    downloading = true
+    if (win) win.setTitle('ROYAL POWER – downloading update…')
+    autoUpdater.downloadUpdate().catch(() => {
+      downloading = false
+      if (win) win.setTitle('ROYAL POWER')
+    })
+  })
+  autoUpdater.on('download-progress', (p) => {
+    if (win) {
+      win.setProgressBar(Math.max(0, Math.min(1, p.percent / 100)))
+      win.setTitle(`ROYAL POWER – downloading update… ${Math.round(p.percent)}%`)
+    }
+  })
+  autoUpdater.on('update-downloaded', () => {
+    if (win) {
+      win.setProgressBar(-1)
+      win.setTitle('ROYAL POWER – installing update…')
+    }
+    // silent installer, then relaunch into the new version
+    setTimeout(() => autoUpdater.quitAndInstall(true, true), 800)
   })
   autoUpdater.on('error', () => {
-    /* offline or no release yet – try again at the next interval */
+    downloading = false
+    if (win) {
+      win.setProgressBar(-1)
+      win.setTitle('ROYAL POWER')
+    }
+    /* offline or no release yet – tried again at the next interval */
   })
 
   const check = () => autoUpdater.checkForUpdates().catch(() => {})

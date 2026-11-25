@@ -50,7 +50,7 @@ export default function Home() {
             </h1>
             <p className="mt-2 text-lg font-semibold text-ink-soft">{settings.tagline}</p>
             <p className="mt-4 max-w-xl text-base text-ink-soft">
-              Request IT equipment, report what you need and follow your ticket from submission to delivery — all in one secure place.
+              Request IT equipment, report what you need and follow your ticket from submission to delivery - all in one secure place.
             </p>
             <div className="mt-7 flex flex-wrap gap-3">
               <Link to="/request/new" className="btn-primary px-6 py-3 text-base">

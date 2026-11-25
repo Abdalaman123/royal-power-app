@@ -59,6 +59,8 @@ jobs:
       - name: Stamp version
         run: npm version "$VERSION" --no-git-tag-version --allow-same-version
       - name: Build website
+        env:
+          APP_VERSION: ${{ env.VERSION }}
         run: npm run build
       - name: Build installer
         run: npx electron-builder --win --publish never
@@ -99,6 +101,8 @@ jobs:
       - name: Remove any installer left in public/downloads
         run: rm -f public/downloads/*.exe public/downloads/*.apk
       - name: Build website
+        env:
+          APP_VERSION: ${{ env.VERSION }}
         run: npm run build
       - name: Create Android project
         run: npx cap add android

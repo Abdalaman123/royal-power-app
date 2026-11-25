@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { RouteSeo } from './components/Seo'
+import { UpdatePrompt } from './components/UpdatePrompt'
 import { isConfigured } from './lib/supabase'
 import SetupNotice from './components/SetupNotice'
 import UserLayout from './components/UserLayout'
@@ -36,6 +37,7 @@ export default function App() {
   return (
     <Suspense fallback={<FullPageLoader />}>
       <RouteSeo />
+      <UpdatePrompt />
       <Routes>
         {/* ---------- User portal ---------- */}
         <Route element={<UserLayout />}>

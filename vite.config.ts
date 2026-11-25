@@ -42,8 +42,11 @@ function seoPlugin(siteUrl: string): Plugin {
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const siteUrl = process.env.VITE_SITE_URL || env.VITE_SITE_URL || process.env.URL || ''
+  // CI stamps every Windows/Android build with its release number; the website build keeps 0.0.0
+  const appVersion = process.env.APP_VERSION || env.APP_VERSION || '0.0.0'
   return {
     plugins: [react(), seoPlugin(siteUrl)],
+    define: { __APP_VERSION__: JSON.stringify(appVersion) },
     build: {
       chunkSizeWarningLimit: 900,
       rollupOptions: {

@@ -126,11 +126,22 @@ jobs:
         run: |
           mkdir -p ~/.android
           cp android-signing/debug.keystore ~/.android/debug.keystore
+          echo "apply from: rootProject.file('../android-signing/signing.gradle')" >> android/app/build.gradle
+          tail -3 android/app/build.gradle
       - name: Build APK
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          for i in 1 2 3 4; do
+            ./gradlew assembleDebug --no-daemon && break
+            if [ "$i" -eq 4 ]; then exit 1; fi
+            echo "Download problem (Maven busy). Retrying in $((i * 45)) seconds..."
+            sleep $((i * 45))
+          done
+      - name: Show APK signing fingerprint
+        run: |
+          APKSIGNER=$(ls $ANDROID_HOME/build-tools/*/apksigner | tail -1)
+          "$APKSIGNER" verify --print-certs android/app/build/outputs/apk/debug/app-debug.apk | head -4 || true
       - name: Upload to release
         run: |
           cp android/app/build/outputs/apk/debug/app-debug.apk ROYAL-POWER.apk

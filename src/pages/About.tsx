@@ -48,7 +48,7 @@ export default function About() {
       </section>
 
       <section>
-        <h2 className="mb-4 text-xl font-extrabold">Frequently asked questions</h2>
+        <h2 className="mb-4 text-xl font-extrabold">Frequently asked question</h2>
         <div className="space-y-3">
           {FAQ.map((f) => (
             <details key={f.q} className="glass group p-5 open:shadow-lift">
